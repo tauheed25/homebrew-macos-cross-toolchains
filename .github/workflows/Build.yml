@@ -10,12 +10,68 @@ jobs:
     runs-on: macos-latest
     strategy:
       matrix:
+        arch:
+          - x86_64
+          - aarch64
         target:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
           - armv7-unknown-linux-gnueabihf
     steps:
       - uses: actions/checkout@v2
+      - name: Build binutils
+        if: matrix.arch == 'aarch64'
+        run: |
+          curl -sqL https://ftp.gnu.org/gnu/binutils/binutils-2.36.1.tar.xz | tar -xz
+          cd binutils-2.36.1
+          mkdir build
+          cd build
+          ../configure --prefix=/usr/local \
+          --target=aarch64-apple-darwin20 \
+          --disable-nls --disable-werror
+          make -j4
+          sudo make install
+          ls /usr/local/bin
+      - name: Build x86_64 to aarch64 Darwin GCC cross compiler
+        if: matrix.arch == 'aarch64'
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+        run: |
+          echo '#
+          # Toolchain type
+          #
+          # CT_CROSS is not set
+          CT_CANADIAN=y
+          CT_TOOLCHAIN_TYPE="canadian"
+          #
+          # Host system
+          #
+          CT_HOST="aarch64-apple-darwin20"
+          CT_HOST_PREFIX=""
+          CT_HOST_SUFFIX=""
+          ' >> ${{ matrix.target }}/.config
+
+          brew install gmp isl libmpc mpfr
+          curl -sqL https://github.com/fxcoudert/gcc/archive/gcc-10-arm-20210220.tar.gz | tar -xz
+          cd gcc-gcc-10-arm-20210220
+          mkdir build
+          cd build
+          ../configure --prefix=/usr/local \
+          --build=x86_64-apple-darwin20 --target=aarch64-apple-darwin20 \
+          --enable-ld=yes \
+          --with-gmp=/usr/local/opt/gmp \
+          --with-mpfr=/usr/local/opt/mpfr \
+          --with-mpc=/usr/local/opt/libmpc \
+          --with-isl=/usr/local/opt/isl \
+          --with-native-system-header-dir=/usr/include \
+          --with-sysroot=$(xcrun --sdk macosx --show-sdk-path) \
+          SED=/usr/bin/sed \
+          AS_FOR_TARGET=/usr/bin/as LD_FOR_TARGET=/usr/bin/ld \
+          NM_FOR_TARGET=/usr/bin/nm RANLIB_FOR_TARGET=/usr/bin/ranlib \
+          AR_FOR_TARGET=/usr/bin/ar LIPO_FOR_TARGET=/usr/bin/lipo \
+          --disable-multilib
+          make -j4 BOOT_LDFLAGS=-Wl,-headerpad_max_install_names
+          sudo make install
       - name: Install crosstool-ng
         run: |
           brew install coreutils
@@ -35,19 +91,19 @@ jobs:
       - name: Archive Toolchain
         run: |
           cd /Volumes/tools
-          tar czf ${{ matrix.target }}-x86_64-darwin.tar.gz ${{ matrix.target }}
+          tar czf ${{ matrix.target }}-${{ matrix.arch }}-darwin.tar.gz ${{ matrix.target }}
           cd -
-          mv /Volumes/tools/${{ matrix.target }}-x86_64-darwin.tar.gz .
+          mv /Volumes/tools/${{ matrix.target }}-${{ matrix.arch }}-darwin.tar.gz .
       - name: Upload Toolchain
         uses: actions/upload-artifact@v2
         with:
           name: toolchains
-          path: ${{ matrix.target }}-x86_64-darwin.tar.gz
+          path: ${{ matrix.target }}-${{ matrix.arch }}-darwin.tar.gz
       - name: Upload Toolchain to GitHub Release
         uses: svenstaro/upload-release-action@v2
         if: "startsWith(github.ref, 'refs/tags/')"
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          asset_name: ${{ matrix.target }}-x86_64-darwin.tar.gz
-          file: ${{ matrix.target }}-x86_64-darwin.tar.gz
+          asset_name: ${{ matrix.target }}-${{ matrix.arch }}-darwin.tar.gz
+          file: ${{ matrix.target }}-${{ matrix.arch }}-darwin.tar.gz
           tag: ${{ github.ref }}
